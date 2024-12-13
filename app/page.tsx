@@ -14,6 +14,7 @@ import { Heart, Shield, Wallet, Loader2 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { useToast } from "@/hooks/use-toast";
+import { analyzeHealthData } from "./actions";
 
 export const SHIELD_TESTNET_CHAIN_ID = "0xa5b5a";
 
@@ -28,6 +29,11 @@ export default function HealthCalculator() {
   const [balance, setBalance] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<{
+    message: string;
+    risk_level?: number;
+    risk_category?: string;
+  } | null>(null);
   const { toast } = useToast();
 
   const handleChainChanged = () => {
@@ -196,22 +202,40 @@ export default function HealthCalculator() {
       }
     }
   };
-
+  // In your component
   const handleAnalyze = async () => {
     setIsAnalyzing(true);
+    setAnalysisResult(null); // Reset result when starting new analysis
     try {
-      // Simulating analysis delay
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      console.log("Analyzing vital signs:", {
-        name,
-        heartRate,
-        bloodPressure,
-        oxygenLevel,
+      if (parseFloat(balance) < 1) {
+        toast({
+          title: "Insufficient Balance",
+          description:
+            "You need at least 1 OWN token to perform analysis. Please get more tokens from the faucet.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const result = await analyzeHealthData({
+        heartRate: parseInt(heartRate),
+        bloodPressure: parseInt(bloodPressure),
+        oxygenLevel: parseInt(oxygenLevel),
+        balance: balance,
       });
+
+      if (result.success) {
+        setAnalysisResult({
+          message: result.message,
+          risk_level: result.risk_level,
+          risk_category: result.risk_category,
+        });
+      }
+
       toast({
-        title: "Analysis Complete",
-        description:
-          "Your health risk has been calculated. Please consult with a healthcare professional for interpretation.",
+        title: result.success ? "Analysis Complete" : "Analysis Failed",
+        description: result.message,
+        variant: result.variant,
       });
     } catch (error) {
       console.error("Analysis failed:", error);
@@ -238,6 +262,16 @@ export default function HealthCalculator() {
       }
     };
   });
+
+  const isFormValid = () => {
+    return (
+      heartRate !== "" &&
+      bloodPressure !== "" &&
+      oxygenLevel !== "" &&
+      parseFloat(balance) >= 1 &&
+      !isAnalyzing
+    );
+  };
 
   if (!isWalletConnected) {
     return (
@@ -469,10 +503,10 @@ export default function HealthCalculator() {
             </div>
 
             <Button
-              className="w-full bg-indigo-600 hover:bg-indigo-700"
+              className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
               size="lg"
               onClick={handleAnalyze}
-              disabled={isAnalyzing}
+              disabled={!isFormValid()}
             >
               {isAnalyzing ? (
                 <>
@@ -483,6 +517,46 @@ export default function HealthCalculator() {
                 "Analyze Risk"
               )}
             </Button>
+
+            {!isFormValid() && !isAnalyzing && (
+              <p className="text-sm text-red-600 text-center">
+                {parseFloat(balance) < 1
+                  ? "You need at least 1 OWN token to perform analysis"
+                  : "Please fill in all vital signs to analyze"}
+              </p>
+            )}
+
+            {analysisResult && (
+              <Card className="border-2 border-indigo-100">
+                <CardHeader>
+                  <CardTitle className="text-xl">Analysis Result</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">Risk Category:</span>
+                    <span className="font-semibold">
+                      {analysisResult.risk_category}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-600">Risk Level:</span>
+                    <span className="font-semibold">
+                      {analysisResult.risk_level}
+                    </span>
+                  </div>
+                  <div className="mt-4 pt-4 border-t">
+                    <div className="w-full bg-gray-200 rounded-full h-2.5">
+                      <div
+                        className="bg-indigo-600 h-2.5 rounded-full"
+                        style={{
+                          width: `${(analysisResult.risk_level || 0) * 20}%`,
+                        }}
+                      ></div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             <Alert variant="destructive" className="bg-blue-50 border-blue-200">
               <Shield className="h-4 w-4" />
