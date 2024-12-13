@@ -8,17 +8,42 @@ import {
   CardTitle,
   CardDescription,
 } from "@/components/ui/card";
+import { contractABI, contractAddress, publicKey } from "./helper";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Heart, Shield, Wallet, Loader2 } from "lucide-react";
+import {
+  Heart,
+  Shield,
+  Wallet,
+  Loader2,
+  ExternalLink,
+  Copy,
+} from "lucide-react";
 import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { useToast } from "@/hooks/use-toast";
 import { analyzeHealthData } from "./actions";
 import { SHIELD_TESTNET_CHAIN_ID } from "./helper";
 
+const validateInput = (value: string, min: number, max: number) => {
+  const numValue = parseInt(value);
+  if (value === "") return true; // Allow empty input
+  if (isNaN(numValue)) return false;
+  return numValue >= min && numValue <= max;
+};
+
+const encrypt = (value: bigint) => {
+  const encryptedVote = publicKey.encrypt(value);
+  let hexString = encryptedVote.toString(16);
+  if (hexString.length % 2) {
+    hexString = "0" + hexString; // Ensure even length
+  }
+  return "0x" + hexString;
+};
+
 export default function HealthCalculator() {
   const [name, setName] = useState("");
+  const [contract, setContract] = useState<ethers.Contract>();
   const [heartRate, setHeartRate] = useState("");
   const [bloodPressure, setBloodPressure] = useState("");
   const [oxygenLevel, setOxygenLevel] = useState("");
@@ -32,6 +57,7 @@ export default function HealthCalculator() {
     message: string;
     risk_level?: number;
     risk_category?: string;
+    hash?: string;
   } | null>(null);
   const { toast } = useToast();
 
@@ -66,10 +92,21 @@ export default function HealthCalculator() {
         const accounts = await window.ethereum.request({
           method: "eth_requestAccounts",
         });
+
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const signer = await provider.getSigner();
+
         setIsWalletConnected(true);
         setWalletAddress(accounts[0]);
         await checkAndSwitchNetwork();
         updateBalance(accounts[0]);
+
+        const contractInstance = new ethers.Contract(
+          contractAddress,
+          contractABI,
+          signer
+        );
+        setContract(contractInstance);
         toast({
           title: "Wallet Connected",
           description: "Your wallet has been successfully connected.",
@@ -201,50 +238,114 @@ export default function HealthCalculator() {
       }
     }
   };
-  // In your component
   const handleAnalyze = async () => {
     setIsAnalyzing(true);
-    setAnalysisResult(null); // Reset result when starting new analysis
-    try {
-      if (parseFloat(balance) < 1) {
+    setAnalysisResult(null);
+    if (contract) {
+      try {
+        if (parseFloat(balance) < 1) {
+          toast({
+            title: "Insufficient Balance",
+            description:
+              "You need at least 1 OWN token to perform analysis. Please get more tokens from the faucet.",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        const result = await analyzeHealthData({
+          heartRate: parseInt(heartRate),
+          bloodPressure: parseInt(bloodPressure),
+          oxygenLevel: parseInt(oxygenLevel),
+          balance: balance,
+        });
+
+        if (result.success) {
+          const encryptedData = {
+            heartRate: encrypt(BigInt(parseInt(heartRate))),
+            bloodPressure: encrypt(BigInt(parseInt(bloodPressure))),
+            oxygenLevel: encrypt(BigInt(parseInt(oxygenLevel))),
+            riskLevel: encrypt(BigInt(result.risk_level as number)),
+          };
+
+          const tx = await contract.submitHealthMetrics(
+            encryptedData.heartRate,
+            encryptedData.bloodPressure,
+            encryptedData.oxygenLevel,
+            encryptedData.riskLevel
+          );
+
+          await tx.wait();
+
+          if (tx.hash) {
+            setAnalysisResult({
+              message: result.message,
+              risk_level: result.risk_level,
+              risk_category: result.risk_category,
+              hash: tx.hash,
+            });
+          }
+        }
+
         toast({
-          title: "Insufficient Balance",
-          description:
-            "You need at least 1 OWN token to perform analysis. Please get more tokens from the faucet.",
+          title: result.success ? "Analysis Complete" : "Analysis Failed",
+          description: result.message,
+          variant: result.variant,
+        });
+      } catch (error) {
+        console.error("Analysis failed:", error);
+        toast({
+          title: "Analysis Failed",
+          description: "Failed to analyze your health data. Please try again.",
           variant: "destructive",
         });
-        return;
+      } finally {
+        setIsAnalyzing(false);
       }
+    }
+  };
 
-      const result = await analyzeHealthData({
-        heartRate: parseInt(heartRate),
-        bloodPressure: parseInt(bloodPressure),
-        oxygenLevel: parseInt(oxygenLevel),
-        balance: balance,
-      });
+  const isFormValid = () => {
+    const hr = parseInt(heartRate);
+    const bp = parseInt(bloodPressure);
+    const ol = parseInt(oxygenLevel);
 
-      if (result.success) {
-        setAnalysisResult({
-          message: result.message,
-          risk_level: result.risk_level,
-          risk_category: result.risk_category,
-        });
-      }
+    return (
+      name !== "" &&
+      !isNaN(hr) &&
+      hr >= 1 &&
+      hr <= 1000 &&
+      !isNaN(bp) &&
+      bp >= 1 &&
+      bp <= 1000 &&
+      !isNaN(ol) &&
+      ol >= 1 &&
+      ol <= 1000 &&
+      parseFloat(balance) >= 1 &&
+      !isAnalyzing
+    );
+  };
 
-      toast({
-        title: result.success ? "Analysis Complete" : "Analysis Failed",
-        description: result.message,
-        variant: result.variant,
-      });
-    } catch (error) {
-      console.error("Analysis failed:", error);
-      toast({
-        title: "Analysis Failed",
-        description: "Failed to analyze your health data. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsAnalyzing(false);
+  const handleHeartRateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    if (validateInput(value, 1, 1000)) {
+      setHeartRate(value);
+    }
+  };
+
+  const handleBloodPressureChange = (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const value = e.target.value;
+    if (validateInput(value, 1, 1000)) {
+      setBloodPressure(value);
+    }
+  };
+
+  const handleOxygenLevelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    if (validateInput(value, 1, 1000)) {
+      setOxygenLevel(value);
     }
   };
 
@@ -261,16 +362,6 @@ export default function HealthCalculator() {
       }
     };
   });
-
-  const isFormValid = () => {
-    return (
-      heartRate !== "" &&
-      bloodPressure !== "" &&
-      oxygenLevel !== "" &&
-      parseFloat(balance) >= 1 &&
-      !isAnalyzing
-    );
-  };
 
   if (!isWalletConnected) {
     return (
@@ -423,6 +514,7 @@ export default function HealthCalculator() {
                 <Heart className="w-5 h-5 text-red-500" />
                 <h2 className="text-lg font-semibold">Vital Signs</h2>
               </div>
+
               <div className="grid gap-4 md:grid-cols-3">
                 <div>
                   <label
@@ -435,15 +527,26 @@ export default function HealthCalculator() {
                     <Input
                       id="heartRate"
                       type="number"
+                      min="1"
+                      max="1000"
                       placeholder="0"
                       value={heartRate}
-                      onChange={(e) => setHeartRate(e.target.value)}
-                      className="pr-16"
+                      onChange={handleHeartRateChange}
+                      className={`pr-16 ${
+                        !validateInput(heartRate, 1, 1000) && heartRate !== ""
+                          ? "border-red-500"
+                          : ""
+                      }`}
                     />
                     <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">
                       BPM
                     </span>
                   </div>
+                  {!validateInput(heartRate, 1, 1000) && heartRate !== "" && (
+                    <p className="text-xs text-red-500 mt-1">
+                      Value must be between 1 and 1000
+                    </p>
+                  )}
                   <p className="text-xs text-gray-500 mt-1">
                     60-100 normal range
                   </p>
@@ -460,15 +563,28 @@ export default function HealthCalculator() {
                     <Input
                       id="bloodPressure"
                       type="number"
+                      min="1"
+                      max="1000"
                       placeholder="0"
                       value={bloodPressure}
-                      onChange={(e) => setBloodPressure(e.target.value)}
-                      className="pr-16"
+                      onChange={handleBloodPressureChange}
+                      className={`pr-16 ${
+                        !validateInput(bloodPressure, 1, 1000) &&
+                        bloodPressure !== ""
+                          ? "border-red-500"
+                          : ""
+                      }`}
                     />
                     <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">
                       mmHg
                     </span>
                   </div>
+                  {!validateInput(bloodPressure, 1, 1000) &&
+                    bloodPressure !== "" && (
+                      <p className="text-xs text-red-500 mt-1">
+                        Value must be between 1 and 1000
+                      </p>
+                    )}
                   <p className="text-xs text-gray-500 mt-1">
                     90-140 normal range
                   </p>
@@ -485,15 +601,28 @@ export default function HealthCalculator() {
                     <Input
                       id="oxygenLevel"
                       type="number"
+                      min="1"
+                      max="1000"
                       placeholder="0"
                       value={oxygenLevel}
-                      onChange={(e) => setOxygenLevel(e.target.value)}
-                      className="pr-8"
+                      onChange={handleOxygenLevelChange}
+                      className={`pr-8 ${
+                        !validateInput(oxygenLevel, 1, 1000) &&
+                        oxygenLevel !== ""
+                          ? "border-red-500"
+                          : ""
+                      }`}
                     />
                     <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">
                       %
                     </span>
                   </div>
+                  {!validateInput(oxygenLevel, 1, 1000) &&
+                    oxygenLevel !== "" && (
+                      <p className="text-xs text-red-500 mt-1">
+                        Value must be between 1 and 1000
+                      </p>
+                    )}
                   <p className="text-xs text-gray-500 mt-1">
                     95-100 normal range
                   </p>
@@ -542,6 +671,39 @@ export default function HealthCalculator() {
                     <span className="font-semibold">
                       {analysisResult.risk_level}
                     </span>
+                  </div>
+                  <div className="flex items-center justify-between ">
+                    <span className="text-gray-600">Transaction:</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-mono text-gray-800">
+                        {analysisResult.hash
+                          ? `${analysisResult.hash.slice(0, 6)}...
+                        ${analysisResult.hash.slice(-4)}`
+                          : null}
+                      </span>
+                      <a
+                        href={`https://gateway-shield-testnet.explorer.caldera.xyz/tx/${analysisResult.hash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 hover:text-blue-300 transition-colors"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(
+                            analysisResult.hash as string
+                          );
+                          toast({
+                            title: "Copied!",
+                            description: "Transaction hash copied to clipboard",
+                          });
+                        }}
+                        className="text-gray-400 hover:text-white transition-colors"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-4 pt-4 border-t">
                     <div className="w-full bg-gray-200 rounded-full h-2.5">
