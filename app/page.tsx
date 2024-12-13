@@ -24,15 +24,13 @@ export default function HealthCalculator() {
   const [oxygenLevel, setOxygenLevel] = useState("");
   const [isWalletConnected, setIsWalletConnected] = useState(false);
   const [isCorrectNetwork, setIsCorrectNetwork] = useState(false);
-  const [currentChainId, setCurrentChainId] = useState<string>();
   const [walletAddress, setWalletAddress] = useState("");
   const [balance, setBalance] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const { toast } = useToast();
 
-  const handleChainChanged = (chainId: string) => {
-    setCurrentChainId(chainId);
+  const handleChainChanged = () => {
     connectWallet();
   };
 
@@ -149,6 +147,7 @@ export default function HealthCalculator() {
           description: "Successfully switched to Gateway Shield Testnet.",
         });
       } catch (switchError) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if ((switchError as any).code === 4902) {
           try {
             await window.ethereum.request({
@@ -238,7 +237,7 @@ export default function HealthCalculator() {
         window.ethereum.removeListener("chainChanged", () => {});
       }
     };
-  }, []);
+  });
 
   if (!isWalletConnected) {
     return (
