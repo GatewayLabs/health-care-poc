@@ -15,8 +15,7 @@ import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { useToast } from "@/hooks/use-toast";
 import { analyzeHealthData } from "./actions";
-
-export const SHIELD_TESTNET_CHAIN_ID = "0xa5b5a";
+import { SHIELD_TESTNET_CHAIN_ID } from "./helper";
 
 export default function HealthCalculator() {
   const [name, setName] = useState("");
